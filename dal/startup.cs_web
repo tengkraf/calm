@@ -1,0 +1,340 @@
+// ======================================
+// Author: Todd Engkraf, template by Ebenezer Monney
+// Email:  info@engkrafcc.com
+// Copyright (c) 2017 www.engkrafcc.com
+// 
+// ==> CodeMaster: contact@engkrafcc.com
+// ======================================
+
+
+
+using AspNet.Security.OpenIdConnect.Primitives;
+using AutoMapper;
+using DAL;
+using DAL.Models;
+using DAL.Core;
+using DAL.Core.Interfaces;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SpaServices.AngularCli;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using OpenIddict.Abstractions;
+using Web_Api.Authorization;
+using Web_Api.Helpers;
+using Web_Api.ViewModels;
+using Swashbuckle.AspNetCore.Swagger;
+using System;
+using AppPermissions = DAL.Core.ApplicationPermissions;
+using Common;
+
+namespace Web_Api
+{
+    public class Startup
+    {
+        public IConfiguration Configuration { get; }
+        //private IConfigurationRoot _Config;
+
+        public Startup(IConfiguration configuration)
+        {
+            Configuration = configuration;
+        }
+
+
+
+        // This method gets called by the runtime. Use this method to add services to the container.
+        public void ConfigureServices(IServiceCollection services)
+        {
+            //_Config = Config.Build();
+
+           services.Configure<DocumentSettings>(Configuration.GetSection("Documents"));
+
+            services.AddDbContext<ApplicationDbContext>(options =>
+            {
+                //options.UseSqlServer(Configuration["ConnectionStrings:DefaultConnection"], b => b.MigrationsAssembly("Web_Api"));
+                options.UseOpenIddict();
+                             options.UseMySql(Configuration["Database:ConnectionString"],b => b.MigrationsAssembly("Web_Api"));
+                             options.UseOpenIddict();
+                                 //_Config.GetSection("Database:ConnectionString").Value, 
+
+            });
+
+            // add identity
+            services.AddIdentity<ApplicationUser, ApplicationRole>()
+                .AddEntityFrameworkStores<ApplicationDbContext>()
+                .AddDefaultTokenProviders();
+
+            // Configure Identity options and password complexity here
+            services.Configure<IdentityOptions>(options =>
+            {
+                // User settings
+                options.User.RequireUniqueEmail = true;
+
+                //    //// Password settings
+                //    //options.Password.RequireDigit = true;
+                //    //options.Password.RequiredLength = 8;
+                //    //options.Password.RequireNonAlphanumeric = false;
+                //    //options.Password.RequireUppercase = true;
+                //    //options.Password.RequireLowercase = false;
+
+                //    //// Lockout settings
+                //    //options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(30);
+                //    //options.Lockout.MaxFailedAccessAttempts = 10;
+
+                options.ClaimsIdentity.UserNameClaimType = OpenIdConnectConstants.Claims.Name;
+                options.ClaimsIdentity.UserIdClaimType = OpenIdConnectConstants.Claims.Subject;
+                options.ClaimsIdentity.RoleClaimType = OpenIdConnectConstants.Claims.Role;
+            });
+
+
+
+            services.AddOpenIddict()
+                .AddCore(options =>
+                {
+                    options.UseEntityFrameworkCore().UseDbContext<ApplicationDbContext>();
+                })
+                .AddServer(options =>
+                {
+                    options.UseMvc();
+                    options.EnableTokenEndpoint("/connect/token");
+                    options.AllowPasswordFlow();
+                    options.AllowRefreshTokenFlow();
+                    options.AcceptAnonymousClients();
+                    options.DisableHttpsRequirement(); // Note: Comment this out in production
+                    options.RegisterScopes(
+                        OpenIdConnectConstants.Scopes.OpenId,
+                        OpenIdConnectConstants.Scopes.Email,
+                        OpenIdConnectConstants.Scopes.Phone,
+                        OpenIdConnectConstants.Scopes.Profile,
+                        OpenIdConnectConstants.Scopes.OfflineAccess,
+                        OpenIddictConstants.Scopes.Roles);
+
+                    // options.UseRollingTokens(); //Uncomment to renew refresh tokens on every refreshToken request
+                    // Note: to use JWT access tokens instead of the default encrypted format, the following lines are required:
+                    // options.UseJsonWebTokens();
+                })
+                .AddValidation(); //Only compatible with the default token format. For JWT tokens, use the Microsoft JWT bearer handler.
+
+
+
+            // Add cors
+            services.AddCors();
+
+            // Add framework services.
+            services.AddMvc();
+            //services.AddMvc().SetCompatibilityVersion(CompatibilityVersion.Version_2_1);
+
+            // In production, the Angular files will be served from this directory
+            services.AddSpaStaticFiles(configuration =>
+            {
+                configuration.RootPath = "ClientApp/dist";
+
+            });
+
+            //Todo: ***Using DataAnnotations for validation until Swashbuckle supports FluentValidation***
+            //services.AddFluentValidation(fv => fv.RegisterValidatorsFromAssemblyContaining<Startup>());
+
+
+            //.AddJsonOptions(opts =>
+            //{
+            //    opts.SerializerSettings.ContractResolver = new CamelCasePropertyNamesContractResolver();
+            //});
+
+
+
+            services.AddSwaggerGen(c =>
+            {
+                c.SwaggerDoc("v1", new Info { Title = "DLS API", Version = "v1" });
+                c.OperationFilter<AuthorizeCheckOperationFilter>();
+                c.AddSecurityDefinition("oauth2", new OAuth2Scheme
+                {
+                    Type = "oauth2",
+                    Flow = "password",
+                    TokenUrl = "/connect/token",
+                    Description = "Note: Leave client_id and client_secret blank"
+                });
+            });
+
+/*             services.AddAuthorization(options =>
+            {
+                options.AddPolicy(AuthPolicies.ViewUserByUserIdPolicy, policy => policy.Requirements.Add(new ViewUserByIdRequirement()));
+
+                options.AddPolicy(AuthPolicies.ViewUsersPolicy, policy => policy.RequireClaim(CustomClaimTypes.Permission, AppPermissions.ViewUsers));
+
+                options.AddPolicy(AuthPolicies.ManageUserByUserIdPolicy, policy => policy.Requirements.Add(new ManageUserByIdRequirement()));
+
+                options.AddPolicy(AuthPolicies.ManageUsersPolicy, policy => policy.RequireClaim(CustomClaimTypes.Permission, AppPermissions.ManageUsers));
+
+                options.AddPolicy(AuthPolicies.ViewRoleByRoleNamePolicy, policy => policy.Requirements.Add(new ViewRoleByNameRequirement()));
+
+                options.AddPolicy(AuthPolicies.ViewRolesPolicy, policy => policy.RequireClaim(CustomClaimTypes.Permission, AppPermissions.ViewRoles));
+
+                options.AddPolicy(AuthPolicies.AssignRolesPolicy, policy => policy.Requirements.Add(new AssignRolesRequirement()));
+
+                options.AddPolicy(AuthPolicies.ManageRolesPolicy, policy => policy.RequireClaim(CustomClaimTypes.Permission, AppPermissions.ManageRoles));
+            }); */
+
+            services.AddAuthorization(options =>
+            {
+                options.AddPolicy(Authorization.Policies.ViewAllUsersPolicy, policy => policy.RequireClaim(CustomClaimTypes.Permission, AppPermissions.ViewUsers));
+                options.AddPolicy(Authorization.Policies.ManageAllUsersPolicy, policy => policy.RequireClaim(CustomClaimTypes.Permission, AppPermissions.ManageUsers));
+
+                options.AddPolicy(Authorization.Policies.ViewAllRolesPolicy, policy => policy.RequireClaim(CustomClaimTypes.Permission, AppPermissions.ViewRoles));
+                options.AddPolicy(Authorization.Policies.ViewRoleByRoleNamePolicy, policy => policy.Requirements.Add(new ViewRoleAuthorizationRequirement()));
+                options.AddPolicy(Authorization.Policies.ManageAllRolesPolicy, policy => policy.RequireClaim(CustomClaimTypes.Permission, AppPermissions.ManageRoles));
+
+                options.AddPolicy(Authorization.Policies.AssignAllowedRolesPolicy, policy => policy.Requirements.Add(new AssignRolesAuthorizationRequirement()));
+            });
+
+            
+             Mapper.Initialize(cfg =>
+            {
+                cfg.AddProfile<AutoMapperProfile>();
+            });
+
+            //services.AddAutoMapper();
+
+
+            // Configurations
+            services.Configure<SmtpConfig>(Configuration.GetSection("SmtpConfig"));
+
+
+            // Business Services
+            services.AddScoped<IEmailer, Emailer>();
+
+
+            // Repositories
+            services.AddScoped<IUnitOfWork, HttpUnitOfWork>();
+            services.AddScoped<IAccountManager, AccountManager>();
+
+/*             // Auth Policies
+            services.AddSingleton<IAuthorizationHandler, ViewUserByIdHandler>();
+            services.AddSingleton<IAuthorizationHandler, ManageUserByIdHandler>();
+            services.AddSingleton<IAuthorizationHandler, ViewRoleByNameHandler>();
+            services.AddSingleton<IAuthorizationHandler, AssignRolesHandler>(); */
+
+            // Auth Handlers
+            services.AddSingleton<IAuthorizationHandler, ViewUserAuthorizationHandler>();
+            services.AddSingleton<IAuthorizationHandler, ManageUserAuthorizationHandler>();
+            services.AddSingleton<IAuthorizationHandler, ViewRoleAuthorizationHandler>();
+            services.AddSingleton<IAuthorizationHandler, AssignRolesAuthorizationHandler>();
+
+            // DB Creation and Seeding
+            services.AddTransient<IDatabaseInitializer, DatabaseInitializer>();
+        }
+
+
+        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public void Configure(IApplicationBuilder app, IHostingEnvironment env, ILoggerFactory loggerFactory, ILogger<Startup> logger, IDatabaseInitializer databaseInitializer)
+        //(IApplicationBuilder app, IHostingEnvironment env, ILoggerFactory loggerFactory)
+        {
+            loggerFactory.AddConsole(Configuration.GetSection("Logging"));
+            loggerFactory.AddDebug(LogLevel.Warning);
+            loggerFactory.AddFile(Configuration.GetSection("Logging"));
+
+            Utilities.ConfigureLogger(loggerFactory);
+            EmailTemplates.Initialize(env);
+
+            if (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+               /*  app.UseWebpackDevMiddleware(new WebpackDevMiddlewareOptions
+                {
+                    HotModuleReplacement = true
+                }); */
+            }
+            else
+            {
+                app.UseExceptionHandler("/Error");
+                app.UseHsts();
+                //app.UseExceptionHandler("/Home/Error");
+            }
+
+            try
+            {
+                //Having database seeding here rather than in Program.Main() ensures logger is configured before seeding occurs
+                databaseInitializer.SeedAsync().Wait();
+            }
+            catch (Exception ex)
+            {
+                logger.LogCritical(LoggingEvents.INIT_DATABASE, ex, LoggingEvents.INIT_DATABASE.Name);
+                throw new Exception(LoggingEvents.INIT_DATABASE.Name, ex);
+            }
+
+
+            //Configure Cors
+            app.UseCors(builder => builder
+                .AllowAnyOrigin()
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+            );
+
+
+            app.UseHttpsRedirection();
+            app.UseStaticFiles();
+            app.UseSpaStaticFiles();
+            app.UseAuthentication();
+
+
+           /*  app.UseExceptionHandler(builder =>
+            {
+                builder.Run(async context =>
+                {
+                    context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                    context.Response.ContentType = MediaTypeNames.ApplicationJson;
+
+                    var error = context.Features.Get<IExceptionHandlerFeature>();
+
+                    if (error != null)
+                    {
+                        string errorMsg = JsonConvert.SerializeObject(new { error = error.Error.Message });
+                        await context.Response.WriteAsync(errorMsg).ConfigureAwait(false);
+                    }
+                });
+            }); */
+
+
+            app.UseSwagger();
+            app.UseSwaggerUI(c =>
+            {
+                c.DocumentTitle = "Swagger UI - DLS";
+                c.SwaggerEndpoint("/swagger/v1/swagger.json", "DLS API V1");
+            });
+
+
+            app.UseMvc(routes =>
+            {
+                /* routes.MapRoute(
+                    name: "default",
+                    template: "{controller=Home}/{action=Index}/{id?}");
+
+                routes.MapSpaFallbackRoute(
+                    name: "spa-fallback",
+                    defaults: new { controller = "Home", action = "Index" }); */
+                    routes.MapRoute(
+                    name: "default",
+                    template: "{controller}/{action=Index}/{id?}");
+            });
+
+            app.UseSpa(spa =>
+            {
+                // To learn more about options for serving an Angular SPA from ASP.NET Core,
+                // see https://go.microsoft.com/fwlink/?linkid=864501
+
+                spa.Options.SourcePath = "ClientApp";
+
+                if (env.IsDevelopment())
+                {
+                    spa.UseAngularCliServer(npmScript: "start");
+                   // spa.Options.StartupTimeout = TimeSpan.FromSeconds(120); // Increase the timeout if angular app is taking longer to startup
+                   // spa.UseProxyToSpaDevelopmentServer("http://localhost:4200"); // Use this instead to use the angular cli server
+                }
+            });
+        }
+    }
+}
